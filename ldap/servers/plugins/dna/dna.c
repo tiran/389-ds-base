@@ -238,6 +238,7 @@ static int dna_fix_maxval(struct configEntry *config_entry,
 static void dna_notice_allocation(struct configEntry *config_entry,
                                   PRUint64 new,
                                   PRUint64 last);
+static PRUint64 dna_get_increment(const struct configEntry *config_entry);
 static int dna_update_shared_config(struct configEntry *config_entry);
 static void dna_update_config_event(time_t event_time, void *arg);
 static int dna_get_shared_servers(struct configEntry *config_entry, PRCList **servers, int get_all);
@@ -1799,8 +1800,9 @@ bail:
 static void
 dna_notice_allocation(struct configEntry *config_entry, PRUint64 new, PRUint64 last)
 {
+    PRUint64 increment = dna_get_increment(config_entry);
     /* update our cached config entry */
-    if ((new != 0) && (new <= (config_entry->maxval + config_entry->interval))) {
+    if ((new != 0) && (new <= (config_entry->maxval + increment))) {
         config_entry->nextval = new;
     }
 
@@ -1825,13 +1827,13 @@ dna_notice_allocation(struct configEntry *config_entry, PRUint64 new, PRUint64 l
     } else {
         if (config_entry->next_range_lower != 0) {
             config_entry->remaining = ((config_entry->maxval - config_entry->nextval + 1) /
-                                       config_entry->interval) +
+                                       increment) +
                                       ((config_entry->next_range_upper -
                                         config_entry->next_range_lower + 1) /
-                                       config_entry->interval);
+                                       increment);
         } else {
             config_entry->remaining = ((config_entry->maxval - config_entry->nextval + 1) /
-                                       config_entry->interval);
+                                       increment);
         }
 
         /* update the shared configuration */
@@ -1839,6 +1841,19 @@ dna_notice_allocation(struct configEntry *config_entry, PRUint64 new, PRUint64 l
     }
 
     return;
+}
+
+/* XXX HACK for testing
+ * blindly assume that interval_attr hold same value as max_interval setting
+ */
+static PRUint64
+dna_get_increment(const struct configEntry *config_entry)
+{
+    if (config_entry->max_interval > 0) {
+        return config_entry->max_interval;
+    } else {
+        return config_entry->interval;
+    }
 }
 
 static int
@@ -2338,7 +2353,7 @@ dna_first_free_value(struct configEntry *config_entry,
     char *prefix = NULL;
     int multitype = 0;
     int result, status;
-    PRUint64 tmpval, sval, i;
+    PRUint64 tmpval, sval, i, increment;
     char *strval = NULL;
 
     /* check if the config is already out of range */
@@ -2349,6 +2364,7 @@ dna_first_free_value(struct configEntry *config_entry,
 
     prefix = config_entry->prefix;
     tmpval = config_entry->nextval;
+    increment = dna_get_increment(config_entry);
 
     if (dna_is_multitype_range(config_entry)) {
         multitype = 1;
@@ -2419,8 +2435,8 @@ dna_first_free_value(struct configEntry *config_entry,
         /* The next value identified in the config entry has already
          * been taken.  We just iterate through the values until we
          * (hopefully) find a free one. */
-        for (tmpval += config_entry->interval; tmpval <= config_entry->maxval;
-             tmpval += config_entry->interval) {
+        for (tmpval += increment; tmpval <= config_entry->maxval;
+             tmpval += increment) {
             /* This will reuse the old memory for the previous filter.  It is
              * guaranteed to have enough space since the filter is the same
              * aside from the assertion value (we allocated enough for the
@@ -2479,7 +2495,7 @@ dna_first_free_value(struct configEntry *config_entry,
             if (config_entry->maxval < sval)
                 break;
 
-            tmpval += config_entry->interval;
+            tmpval += increment;
         }
     }
 
@@ -2520,6 +2536,7 @@ dna_get_next_value(struct configEntry *config_entry,
     char next_value[22] = {0};
     PRUint64 setval = 0;
     PRUint64 nextval = 0;
+    PRUint64 increment = dna_get_increment(config_entry);
     int ret;
 
     slapi_log_err(SLAPI_LOG_TRACE, DNA_PLUGIN_SUBSYSTEM,
@@ -2558,11 +2575,11 @@ dna_get_next_value(struct configEntry *config_entry,
         }
     }
 
-    nextval = setval + config_entry->interval;
+    nextval = setval + increment;
     /* update nextval if we have not reached the end
      * of our current range */
     if ((config_entry->maxval == -1) ||
-        (nextval <= (config_entry->maxval + config_entry->interval))) {
+        (nextval <= (config_entry->maxval + increment))) {
         /* try to set the new next value in the config entry */
         snprintf(next_value, sizeof(next_value), "%" PRIu64, nextval);
 
@@ -2844,6 +2861,7 @@ dna_activate_next_range(struct configEntry *config_entry)
     /* 16 for max 64-bit unsigned plus the trailing '\0' */
     char maxval_val[22];
     char nextval_val[22];
+    PRUint64 increment = dna_get_increment(config_entry);
     int ret = 0;
 
     /* Setup the modify operation for the config entry */
@@ -2900,7 +2918,7 @@ dna_activate_next_range(struct configEntry *config_entry)
         config_entry->next_range_upper = 0;
         config_entry->next_range_lower = 0;
         config_entry->remaining = ((config_entry->maxval - config_entry->nextval + 1) /
-                                   config_entry->interval);
+                                   increment);
         /* update the shared configuration */
         dna_update_shared_config(config_entry);
     }
