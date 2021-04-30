@@ -50,6 +50,8 @@
 #define DNA_EXCLUDE_SCOPE "dnaExcludeScope"
 #define DNA_REMOTE_BIND_DN "dnaRemoteBindDN"
 #define DNA_REMOTE_BIND_PW "dnaRemoteBindCred"
+#define DNA_INTERVAL_ATTR "dnaIntervalAttr"
+#define DNA_MAX_INTERVAL "dnaMaxInterval"
 
 /* since v2 */
 #define DNA_MAXVAL "dnaMaxValue"
@@ -137,6 +139,8 @@ struct configEntry
     char *remote_binddn;
     char *remote_bindpw;
     PRUint64 timeout;
+    char **interval_attr;
+    PRUint64 max_interval;
     /* This lock protects the 5 members below.  All
      * of the above members are safe to read as long
      * as you call dna_read_lock() first. */
@@ -327,6 +331,12 @@ dna_config_copy(void)
             new_entry->shared_cfg_dn = slapi_ch_strdup(config_entry->shared_cfg_dn);
             new_entry->remote_binddn = slapi_ch_strdup(config_entry->remote_binddn);
             new_entry->remote_bindpw = slapi_ch_strdup(config_entry->remote_bindpw);
+            if (config_entry->interval_attr == NULL) {
+                new_entry->interval_attr = NULL;
+            } else {
+                new_entry->interval_attr = slapi_ch_array_dup(config_entry->interval_attr);
+            }
+            new_entry->max_interval = config_entry->max_interval;
             new_entry->timeout = config_entry->timeout;
             new_entry->interval = config_entry->interval;
             new_entry->threshold = config_entry->threshold;
@@ -1327,6 +1337,34 @@ dna_parse_config_entry(Slapi_PBlock *pb, Slapi_Entry *e, int apply)
         slapi_ch_free_string(&value);
     }
 
+    /* interval attr */
+    entry->interval_attr = slapi_entry_attr_get_charray(e, DNA_INTERVAL_ATTR);
+    for (i = 0; entry->interval_attr && entry->interval_attr[i]; i++) {
+        if (!slapi_attr_syntax_exists(entry->interval_attr[i])) {
+            slapi_log_err(SLAPI_LOG_ERR, DNA_PLUGIN_SUBSYSTEM,
+                          "dna_parse_config_entry - dnaIntervalAttr (%s) "
+                          "does not exist.\n",
+                          entry->interval_attr[i]);
+            ret = DNA_FAILURE;
+            goto bail;
+        }
+        slapi_log_err(SLAPI_LOG_CONFIG, DNA_PLUGIN_SUBSYSTEM,
+                      "----------> %s [%s]\n", DNA_INTERVAL_ATTR,
+                      entry->interval_attr[i]);
+    }
+
+    value = slapi_entry_attr_get_charptr(e, DNA_MAX_INTERVAL);
+    if (value) {
+        entry->max_interval = strtoull(value, 0, 0);
+        slapi_ch_free_string(&value);
+    } else {
+        entry->max_interval = 0;
+    }
+
+    slapi_log_err(SLAPI_LOG_CONFIG, DNA_PLUGIN_SUBSYSTEM,
+                  "dna_parse_config_entry - %s [%" PRIu64 "]\n", DNA_MAX_INTERVAL,
+                  entry->max_interval);
+
     /* If we were only called to validate config, we can
      * just bail out before applying the config changes */
     if (apply == 0) {
@@ -1467,6 +1505,9 @@ dna_free_config_entry(struct configEntry **entry)
     slapi_ch_free_string(&e->shared_cfg_dn);
     slapi_ch_free_string(&e->remote_binddn);
     slapi_ch_free_string(&e->remote_bindpw);
+    if (e->interval_attr) {
+        slapi_ch_array_free(e->interval_attr);
+    }
 
     slapi_destroy_mutex(e->lock);
 
@@ -4761,6 +4802,10 @@ dna_dump_config_entry(struct configEntry *entry)
     for (i = 0; entry->excludescope && entry->excludescope[i]; i++) {
         printf("<---- excluded scope -> %s\n", slapi_sdn_get_dn(entry->excludescope[i]));
     }
+    for (i = 0; entry->interval_attr && entry->interval_attr[i]; i++) {
+        printf("<---- interval attr --> %s\n", entry->interval_attr[i]);
+    }
+    printf("<---- max interval ---> %" PRIu64 "\n", entry->max_interval);
     printf("<---- next value -----> %" PRIu64 "\n", entry->nextval);
     printf("<---- max value ------> %" PRIu64 "\n", entry->maxval);
     printf("<---- interval -------> %" PRIu64 "\n", entry->interval);
